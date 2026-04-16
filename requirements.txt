@@ -1,2 +1,4 @@
-aiogram
-tradingview_ta
+aiogram==2.25.1
+tradingview-ta
+aiohttp
+google-generativeai
