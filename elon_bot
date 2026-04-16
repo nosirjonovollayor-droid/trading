@@ -1,0 +1,120 @@
+import asyncio
+import logging
+import sys
+import aiohttp
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.client.default import DefaultBotProperties
+from tradingview_ta import TA_Handler, Interval
+from datetime import datetime
+
+# ==================== 1. SOZLAMALAR ====================
+TOKEN = "8517036646:AAH5CXyETmo3URy7cnKnv_4863A-c5ixf64"
+ADMIN_ID = 7054481836
+OWNER_USERNAME = "@dilnura_admin"
+RENDER_URL = "https://trading-ko7e.onrender.com" 
+
+SYMBOLS = {
+    "GOLD": {"symbol": "XAUUSD", "screener": "cfd", "exchange": "OANDA"},
+    "EURO": {"symbol": "EURUSD", "screener": "forex", "exchange": "FX_IDC"},
+    "POUND": {"symbol": "GBPUSD", "screener": "forex", "exchange": "FX_IDC"},
+    "BITCOIN": {"symbol": "BTCUSDT", "screener": "crypto", "exchange": "BINANCE"}
+}
+
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
+dp = Dispatcher()
+LOGO_URL = "https://t4.ftcdn.net/jpg/04/42/21/53/360_F_442215355_Aji94Il8igL8mJ9H667U5Q2L9Xv9H2SS.jpg"
+
+# ==================== 2. SELF-PING ====================
+async def keep_alive():
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(RENDER_URL) as response:
+                    logging.info(f"Self-ping: {response.status}")
+            except: pass
+            await asyncio.sleep(600)
+
+# ==================== 3. TAHLIL FUNKSIYASI ====================
+async def get_analysis(symbol_key):
+    try:
+        await asyncio.sleep(2) # TradingView 429 xatosini oldini olish uchun pauza
+        data = SYMBOLS[symbol_key]
+        handler = TA_Handler(
+            symbol=data["symbol"], screener=data["screener"],
+            exchange=data["exchange"], interval=Interval.INTERVAL_15_MINUTES
+        )
+        analysis = handler.get_analysis()
+        close = analysis.indicators['close']
+        rec = analysis.summary['RECOMMENDATION']
+        
+        emoji = "🚀" if "BUY" in rec else "📉" if "SELL" in rec else "⏳"
+        return (f"{emoji} *{symbol_key} TAHLILI*\n\n"
+                f"💎 Narx: `{close}`\n"
+                f"📢 Signal: *{rec}*")
+    except Exception as e:
+        logging.error(f"Error {symbol_key}: {e}")
+        return f"⚠️ {symbol_key} tahlilida xato."
+
+# ==================== 4. AVTO-SKANER ====================
+async def auto_scanner():
+    while True:
+        for key in SYMBOLS:
+            try:
+                report = await get_analysis(key)
+                if "STRONG" in report:
+                    now = datetime.now().strftime("%H:%M")
+                    await bot.send_message(ADMIN_ID, f"🔔 *MUHIM SIGNAL* [{now}]\n\n{report}")
+                await asyncio.sleep(5) # Har bir juftlik orasida 5 soniya kutish
+            except: continue
+        await asyncio.sleep(900)
+
+# ==================== 5. KLAVIATURALAR ====================
+def get_main_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔍 Bozorni tahlil qilish", callback_data="choose_pair")],
+        [InlineKeyboardButton(text="💎 Premium", callback_data="premium")],
+        [InlineKeyboardButton(text="📊 Statistika", callback_data="stats")]
+    ])
+
+def get_pairs_kb():
+    buttons = [[InlineKeyboardButton(text=f"📊 {k}", callback_data=f"analyze_{k}")] for k in SYMBOLS]
+    buttons.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# ==================== 6. HANDLERLAR ====================
+@dp.message(Command("start"))
+async def start(m: types.Message):
+    await m.answer_photo(photo=LOGO_URL, caption=f"👋 Salom {m.from_user.first_name}!\n\nRocket Terminalga xush kelibsiz!", reply_markup=get_main_kb())
+
+@dp.callback_query()
+async def callbacks(cb: types.CallbackQuery):
+    if cb.data == "choose_pair":
+        await cb.message.edit_caption(caption="📊 *Analiz uchun tanlang:*", reply_markup=get_pairs_kb())
+    elif cb.data.startswith("analyze_"):
+        pair = cb.data.split("_")[1]
+        res = await get_analysis(pair)
+        await cb.message.answer(res)
+    elif cb.data == "premium":
+        # Markdown xatosini oldini olish uchun matnni tozaladim
+        text = ("💎 *PREMIUM IMKONIYATLAR:*\n\n"
+                "• 24/7 Shaxsiy signallar\n"
+                "• Aniq TP va SL darajalari\n"
+                "• VIP guruhga a'zolik\n\n"
+                "Murojaat: @dilnura\_admin") # Pastki chiziqqa e'tibor!
+        await cb.message.edit_caption(caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back")]]))
+    elif cb.data == "back":
+        await cb.message.edit_caption(caption="🚀 *ROCKET TERMINAL*", reply_markup=get_main_kb())
+    elif cb.data == "stats":
+        await cb.answer("Haftalik: +1240 pips ✅", show_alert=True)
+    await cb.answer()
+
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    asyncio.create_task(auto_scanner())
+    asyncio.create_task(keep_alive())
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
